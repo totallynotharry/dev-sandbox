@@ -434,9 +434,11 @@ body {
 
 <canvas id="cvs"></canvas>
 
-<!-- UV — must be first, before any __uv$config reference -->
-<script src="uv/uv.bundle.js"></script>
-<script src="uv/uv.config.js"></script>
+
+
+<!-- Scramjet + BareMux - load order matters -->
+<script src="/baremux/bare.cjs"></script>
+<script src="/scram/scramjet.all.js"></script>
 
 <button class="back-btn" id="back-btn">
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -517,9 +519,9 @@ body {
 
 <!-- ══ PROXY ══ -->
 <div class="page" id="proxy-page">
-  <div class="proxy-eyebrow">Ultraviolet</div>
+  <div class="proxy-eyebrow">Scramjet</div>
   <div class="proxy-heading">Web Proxy</div>
-  <div class="proxy-desc">Route any site through UV — bypass filters, browse freely.</div>
+  <div class="proxy-desc">Route any site through Scramjet — bypass filters, browse freely.</div>
 
   <div class="proxy-bar">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
@@ -690,86 +692,77 @@ body {
   init(); frame();
 })();
 
-// ══ UV helpers ═════════════════════════════════════════════
-// __uv$config provided by uv/uv.config.js
+// ══ Scramjet helpers ══════════════════════════════════════
+// Scramjet uses ScramjetController (from scramjet.all.js)
+// and BareMux (from bare.cjs) for transport via a Wisp server.
+// All files must be served locally — the Wisp server can be public.
 
-function uvUrl(url) {
-  return __uv$config.prefix + __uv$config.encodeUrl(url);
-}
+const WISP_SERVER = 'wss://wisp.mercurywork.shop/';
+const SCRAM_PREFIX = '/scram/';
 
-// From download.js — checks if a string is a navigable URL
-function isUrl(val = '') {
-  if (/^http(s?):\/\//.test(val)) return true;
-  if (val.includes('.') && val.substr(0, 1) !== ' ') return true;
-  return false;
-}
-
-/**
- * Decide how to open a game URL:
- *  - Relative paths like /games/slope  → load directly in iframe (no UV needed)
- *  - Absolute https:// URLs            → route through UV
- */
 function isAbsoluteUrl(url) {
   return /^https?:\/\//i.test(url);
 }
 
-function resolveSearchUrl(raw, engine) {
+function resolveSearchUrl(raw, eng) {
   if (!raw) return null;
   if (/^https?:\/\//i.test(raw)) return raw;
   if (/^[\w-]+(\.[a-z]{2,})+/i.test(raw.split('/')[0])) return 'https://' + raw;
-  return engine + encodeURIComponent(raw);
+  return eng + encodeURIComponent(raw);
 }
-
-// ══ Service Worker ═════════════════════════════════════════
-// Following the same pattern as download.js:
-// Register SW fresh each time before proxying, then navigate.
-// This ensures the SW is controlling the page before we set iframe.src.
 
 function setStatus(html) {
   const el = document.getElementById('proxy-status');
   if (el) el.innerHTML = html;
 }
 
-/**
- * Registers (or re-uses) the SW and resolves when it's active and controlling.
- * Returns a Promise so callers can await it before setting iframe.src.
- */
-function ensureSW() {
+// Initialise Scramjet once and cache the controller
+let _scramjet = null;
+let _swReady  = false;
+
+async function initScramjet() {
+  if (_swReady) return;
+
   if (!('serviceWorker' in navigator)) {
-    setStatus('Service workers not supported in this browser.');
-    return Promise.reject('no-sw');
+    setStatus('Service workers not supported.');
+    throw new Error('no-sw');
   }
 
-  return navigator.serviceWorker.register('./sw.js', {
-    scope: __uv$config.prefix
-  }).then(reg => {
-    setStatus('<span class="ok">● UV active</span> — proxied through Ultraviolet');
-
-    // If a SW is already active and controlling, we're good immediately.
-    if (navigator.serviceWorker.controller) return reg;
-
-    // Otherwise wait for the new SW to activate and take control.
-    return new Promise(resolve => {
-      const onController = () => {
-        navigator.serviceWorker.removeEventListener('controllerchange', onController);
-        resolve(reg);
-      };
-      // If it activates before controllerchange fires, catch that too.
-      if (reg.active) { resolve(reg); return; }
-      reg.installing?.addEventListener('statechange', function () {
-        if (this.state === 'activated') resolve(reg);
-      });
-      navigator.serviceWorker.addEventListener('controllerchange', onController);
-    });
-  }).catch(err => {
-    setStatus('SW failed — serve from a web server, not file://.');
-    console.warn('[lightning] SW error:', err);
-    throw err;
+  // 1. Init the ScramjetController (provided by scramjet.all.js)
+  const { ScramjetController } = $scramjetLoadController();
+  _scramjet = new ScramjetController({
+    files: {
+      wasm:  SCRAM_PREFIX + 'scramjet.wasm.wasm',
+      all:   SCRAM_PREFIX + 'scramjet.all.js',
+      sync:  SCRAM_PREFIX + 'scramjet.sync.js',
+    }
   });
+  await _scramjet.init();
+
+  // 2. Register the service worker (scope must match sw.js importScripts path)
+  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+
+  // 3. Wait for it to be active
+  await new Promise(resolve => {
+    if (navigator.serviceWorker.controller) { resolve(); return; }
+    navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
+    if (reg.active) resolve();
+  });
+
+  // 4. Set the Wisp transport via BareMux
+  const conn = new BareMux.BareMuxConnection('/baremux/worker.js');
+  await conn.setTransport('/epoxy/index.mjs', [{ wisp: WISP_SERVER }]);
+
+  _swReady = true;
+  setStatus('<span class="ok">● Scramjet active</span> — traffic proxied via Wisp');
+  console.log('[lightning] Scramjet ready');
 }
 
-// Pre-register on load so it's ready before first use
-window.addEventListener('load', () => ensureSW().catch(() => {}));
+// Pre-warm on load
+window.addEventListener('load', () => initScramjet().catch(err => {
+  console.warn('[lightning] Scramjet init failed:', err);
+  setStatus('Proxy unavailable — serve from a web server, not file://.');
+}));
 
 // ══ Navigation ═════════════════════════════════════════════
 const backBtn = document.getElementById('back-btn');
@@ -812,7 +805,7 @@ document.addEventListener('click', () =>
   document.getElementById('engine-dd').classList.remove('open')
 );
 
-// ══ Home search — always through UV ════════════════════════
+// ══ Home search — always through Scramjet ═══════════════════
 function homeSearch() {
   const q = document.getElementById('home-search').value.trim();
   if (!q) return;
@@ -827,32 +820,34 @@ document.getElementById('home-search').addEventListener('keydown', e => {
 
 // ══ Modal open ═════════════════════════════════════════════
 /**
- * @param {string}  url      - destination URL or relative path
- * @param {string}  title    - label shown in the modal bar
- * @param {boolean} forceUV  - force UV even for relative paths
+ * @param {string}  url       - destination URL or relative path
+ * @param {string}  title     - label shown in modal bar
+ * @param {boolean} forceProxy - force proxy even for non-absolute URLs
  */
-function openModal(url, title, forceUV = false) {
-  const needsProxy = forceUV || isAbsoluteUrl(url);
+function openModal(url, title, forceProxy = false) {
+  const needsProxy = forceProxy || isAbsoluteUrl(url);
 
-  // Show modal immediately with a loading state
   document.getElementById('modal-title').textContent = title || url;
   document.getElementById('game-frame').src = '';
   document.getElementById('modal').classList.add('open');
 
   if (needsProxy) {
-    // Mirror download.js: register SW first, THEN set src.
-    // This guarantees the service worker intercepts the request.
-    ensureSW().then(() => {
+    // Ensure Scramjet is ready, then navigate via the /scram/ service worker prefix
+    initScramjet().then(() => {
       let target = url;
-      if (!isUrl(target)) target = 'https://www.google.com/search?q=' + encodeURIComponent(target);
-      else if (!/^https?:\/\//i.test(target)) target = 'https://' + target;
-      document.getElementById('game-frame').src =
-        __uv$config.prefix + __uv$config.encodeUrl(target);
+      if (!/^https?:\/\//i.test(target)) {
+        target = target.includes('.') && !target.startsWith(' ')
+          ? 'https://' + target
+          : 'https://www.google.com/search?q=' + encodeURIComponent(target);
+      }
+      // Scramjet intercepts requests under its SW scope — just navigate the iframe
+      // to the scramjet service path which the SW will catch and proxy
+      document.getElementById('game-frame').src = '/scram/go#' + encodeURIComponent(target);
     }).catch(() => {
-      document.getElementById('modal-title').textContent = 'UV unavailable — serve from a web server';
+      document.getElementById('modal-title').textContent = 'Proxy unavailable — serve from a web server';
     });
   } else {
-    // Relative path (e.g. /games/slope) — load directly, no proxy needed
+    // Relative path e.g. /games/files/drive-mad/index.html — load directly
     document.getElementById('game-frame').src = url;
   }
 }
@@ -899,7 +894,7 @@ function closeModal() {
 document.getElementById('close-modal').addEventListener('click', closeModal);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-// ══ Proxy page — always UV ═════════════════════════════════
+// ══ Proxy page — always Scramjet ════════════════════════════
 function proxyGo() {
   const raw = document.getElementById('proxy-input').value.trim();
   if (!raw) return;
@@ -959,7 +954,7 @@ function renderGames() {
           ? `<img class="card-img" src="${esc(thumb)}" alt="${esc(name)}" loading="lazy"
                  onerror="this.outerHTML='<div class=card-placeholder>🎮</div>'">`
           : `<div class="card-placeholder">🎮</div>`}
-        ${needsProxy ? `<div class="badge-proxy">UV</div>` : ''}
+        ${needsProxy ? `<div class="badge-proxy">SJ</div>` : ''}
         ${g.new ? `<div class="badge-new">new</div>` : ''}
         <div class="card-overlay">
           <div class="card-play">
