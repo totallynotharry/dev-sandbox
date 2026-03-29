@@ -436,9 +436,9 @@ body {
 
 
 
-<!-- Scramjet + BareMux - load order matters -->
-<script src="baremux/bare.cjs"></script>
-<script src="scram/scramjet.all.js"></script>
+<!-- bare-mux then scramjet — epoxy is imported dynamically in JS -->
+<script src="/baremux/bare.cjs"></script>
+<script src="/scram/scramjet.all.js"></script>
 
 <button class="back-btn" id="back-btn">
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -755,19 +755,16 @@ function initScramjet() {
       });
     }
 
-    // 4. Set transport using bare-mux v1 API: SetTransport(className, config)
-    // epoxy/index.mjs registers window.EpxMod globally when imported as a module script.
-    // SetTransport then finds it via eval("EpxMod.EpoxyClient").
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.type = 'module';
-      s.textContent = `import('/epoxy/index.mjs').then(m => { window.EpxMod = m; }).catch(e => console.error('[lightning] epoxy load failed', e));`;
-      s.onload = resolve;
-      document.head.appendChild(s);
-      // Give it a moment to execute
-      setTimeout(resolve, 500);
-    });
-    BareMux.SetTransport('EpxMod.EpoxyClient', { wisp: WISP_SERVER });
+    // 4. Import epoxy dynamically and use SetSingletonTransport.
+    // This bypasses eval() entirely — works regardless of what the module exports.
+    const epoxy = await import('/epoxy/index.mjs');
+    // epoxy-tls v2+ exports EpoxyClient; older versions may export EpoxyTransport
+    const Cls = epoxy.EpoxyClient ?? epoxy.EpoxyTransport ?? epoxy.default;
+    if (typeof Cls !== 'function') {
+      throw new Error('No EpoxyClient class found in /epoxy/index.mjs — exports: ' + Object.keys(epoxy).join(', '));
+    }
+    const epoxyInst = new Cls({ wisp: WISP_SERVER });
+    await BareMux.SetSingletonTransport(epoxyInst);
 
     setStatus('<span class="ok">● Scramjet active</span> — proxied via Wisp');
     console.log('[lightning] Scramjet ready');
