@@ -180,5 +180,11 @@
     "title": "ULTRAKILL",
     "thumbnail": "/games/thumbs/ultrakill.jpg",
     "file": "/games/files/ultrakill/index.html"
+  },
+  {
+    "id": "minecraft",
+    "title": "Minecraft",
+    "thumbnail": "/games/thumbs/minecraft.png",
+    "file": "/games/files/non-folder/Minecraft.html"
   }
 ]
