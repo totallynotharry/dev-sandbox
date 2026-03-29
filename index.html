@@ -696,7 +696,7 @@ body {
 // Uses relative paths so this works on GitHub Pages subfolders
 // e.g. username.github.io/reponame/ — no absolute /paths/ used.
 
-const WISP_SERVER = 'wss://wisp.mercurywork.shop/';
+const WISP_SERVER = 'wss://wisp.mercurywork.shop';
 
 function isAbsoluteUrl(url) {
   return /^https?:\/\//i.test(url);
@@ -736,10 +736,16 @@ function initScramjet() {
     // 1. Init ScramjetController — keep instance so encodeUrl() works later
     const { ScramjetController } = $scramjetLoadController();
     _sj = new ScramjetController({
+      prefix: '/scramjet/',
       files: {
         wasm: '/scram/scramjet.wasm.wasm',
         all:  '/scram/scramjet.all.js',
         sync: '/scram/scramjet.sync.js',
+      },
+      flags: {
+        rewriterLogs: false,
+        naiiveRewriter: false,
+        scramitize: false,
       }
     });
     await _sj.init();
