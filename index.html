@@ -716,7 +716,7 @@ function setStatus(html) {
 
 // _sj holds the ScramjetController after init — needed for encodeUrl()
 let _sj = null;
-let _sjInit = null; // singleton promise so we only init once
+let _sjInit = null; // singleton promise — only initialise once
 
 function initScramjet() {
   if (_sjInit) return _sjInit;
@@ -725,13 +725,21 @@ function initScramjet() {
       throw new Error('Service workers not supported');
     }
     if (typeof $scramjetLoadController === 'undefined') {
-      throw new Error('scramjet.all.js failed to load');
-    }
-    if (typeof BareMux === 'undefined') {
-      throw new Error('baremux/bare.cjs failed to load');
+      throw new Error('scramjet.all.js did not load — check /scram/ folder');
     }
 
-    // 1. Create and init the controller — stores instance for encodeUrl() later
+    // bare.cjs loaded via <script> exposes either window.BareMux (namespace)
+    // or BareMuxConnection directly on window depending on build format.
+    // Support both.
+    const BareMuxConnection =
+      (typeof BareMux !== 'undefined' && BareMux.BareMuxConnection) ||
+      (typeof window.BareMuxConnection !== 'undefined' && window.BareMuxConnection);
+
+    if (!BareMuxConnection) {
+      throw new Error('BareMuxConnection not found — check /baremux/bare.cjs');
+    }
+
+    // 1. Init ScramjetController (keeps instance for encodeUrl later)
     const { ScramjetController } = $scramjetLoadController();
     _sj = new ScramjetController({
       files: {
@@ -742,30 +750,30 @@ function initScramjet() {
     });
     await _sj.init();
 
-    // 2. Register the SW at root scope
+    // 2. Register SW
     const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
 
-    // 3. Wait for it to be controlling
+    // 3. Wait until SW is controlling this page
     if (!navigator.serviceWorker.controller) {
       await new Promise(resolve => {
         navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
-        if (reg.active) setTimeout(resolve, 200);
+        if (reg.active) setTimeout(resolve, 300);
       });
     }
 
-    // 4. Set transport: BareMux → Epoxy → Wisp
-    const conn = new BareMux.BareMuxConnection('/baremux/worker.js');
-    const hasTransport = await conn.getTransport();
-    if (!hasTransport) {
+    // 4. Set BareMux transport → Epoxy → public Wisp server
+    const conn = new BareMuxConnection('/baremux/worker.js');
+    const current = await conn.getTransport().catch(() => null);
+    if (!current) {
       await conn.setTransport('/epoxy/index.mjs', [{ wisp: WISP_SERVER }]);
     }
 
     setStatus('<span class="ok">● Scramjet active</span> — proxied via Wisp');
     console.log('[lightning] Scramjet ready');
   })().catch(err => {
-    _sjInit = null; // allow retry
+    _sjInit = null; // reset so user can retry
     setStatus('<span class="warn">●</span> Proxy error: ' + err.message);
-    console.error('[lightning] Scramjet failed:', err);
+    console.error('[lightning] Scramjet init error:', err);
     throw err;
   });
   return _sjInit;
