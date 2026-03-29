@@ -552,50 +552,65 @@ body {
 <script>
 'use strict';
 
-// ══ Constellation (mouse-reactive) ════════════════════════
+// ══ Constellation (mouse-reactive + spring-back) ══════════
 (function () {
   const c = document.getElementById('cvs');
   const ctx = c.getContext('2d');
   let pts = [], W, H;
   const N          = 80;
-  const LINK_DIST  = 150;   // max line distance
-  const MOUSE_PULL = 200;   // radius in which mouse attracts particles
-  const PULL_STR   = 0.018; // attraction strength
-  const GOLD_ZONE  = 130;   // radius where lines/dots turn gold
+  const LINK_DIST  = 150;
+  const MOUSE_PULL = 180;   // radius mouse attracts within
+  const PULL_STR   = 0.022; // attraction toward cursor
+  const SPRING     = 0.018; // spring back toward home
+  const DAMP       = 0.88;  // velocity damping
+  const GOLD_ZONE  = 130;   // radius for gold highlight
 
-  // Raw and smoothed mouse coords
-  let mx = -9999, my = -9999;
-  let smx = -9999, smy = -9999;
+  let mx = -9999, my = -9999; // raw mouse
+  let smx = -9999, smy = -9999; // smoothed mouse
+  let mouseIn = false;
 
-  window.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
-  window.addEventListener('mouseleave', () => { mx = -9999; my = -9999; });
+  window.addEventListener('mousemove', e => {
+    mx = e.clientX; my = e.clientY; mouseIn = true;
+  });
+  window.addEventListener('mouseleave', () => {
+    mouseIn = false; mx = -9999; my = -9999;
+  });
 
   function resize() { W = c.width = innerWidth; H = c.height = innerHeight; }
 
   function init() {
     resize();
-    pts = Array.from({ length: N }, () => ({
-      x:  Math.random() * W,
-      y:  Math.random() * H,
-      vx: (Math.random() - .5) * .12,
-      vy: (Math.random() - .5) * .12,
-      r:  Math.random() * 1.1 + .35,
-      a:  Math.random() * Math.PI * 2,
-      pa: Math.random() * .006 + .002
-    }));
+    pts = Array.from({ length: N }, () => {
+      const hx = Math.random() * W;
+      const hy = Math.random() * H;
+      return {
+        x: hx, y: hy,     // current pos
+        hx, hy,            // home position
+        vx: 0, vy: 0,
+        r:  Math.random() * 1.1 + .35,
+        a:  Math.random() * Math.PI * 2,
+        pa: Math.random() * .005 + .002
+      };
+    });
   }
 
   function frame() {
     ctx.clearRect(0, 0, W, H);
 
-    // Smooth cursor tracking (lag = feel)
-    smx += (mx - smx) * 0.07;
-    smy += (my - smy) * 0.07;
+    // Smooth mouse
+    if (mouseIn) {
+      smx += (mx - smx) * 0.07;
+      smy += (my - smy) * 0.07;
+    } else {
+      // When mouse gone, smoothed pos fades to offscreen
+      smx += (-9999 - smx) * 0.04;
+      smy += (-9999 - smy) * 0.04;
+    }
 
-    // Soft gold bloom that follows mouse
-    if (mx > 0) {
-      const mg = ctx.createRadialGradient(smx, smy, 0, smx, smy, MOUSE_PULL * 1.4);
-      mg.addColorStop(0, 'rgba(245,196,60,0.06)');
+    // Gold bloom follows smoothed mouse
+    if (mouseIn) {
+      const mg = ctx.createRadialGradient(smx, smy, 0, smx, smy, MOUSE_PULL * 1.5);
+      mg.addColorStop(0, 'rgba(245,196,60,0.055)');
       mg.addColorStop(1, 'transparent');
       ctx.fillStyle = mg;
       ctx.fillRect(0, 0, W, H);
@@ -603,7 +618,10 @@ body {
 
     // Update particles
     for (const p of pts) {
-      if (mx > 0) {
+      p.a += p.pa;
+
+      if (mouseIn) {
+        // Pull toward cursor
         const dx = smx - p.x, dy = smy - p.y;
         const d  = Math.sqrt(dx * dx + dy * dy);
         if (d < MOUSE_PULL && d > 1) {
@@ -612,11 +630,14 @@ body {
           p.vy += (dy / d) * f;
         }
       }
+
+      // Always spring toward home position
+      p.vx += (p.hx - p.x) * SPRING;
+      p.vy += (p.hy - p.y) * SPRING;
+
       // Dampen
-      p.vx *= 0.97; p.vy *= 0.97;
-      p.x  += p.vx; p.y  += p.vy; p.a += p.pa;
-      if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
-      if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+      p.vx *= DAMP; p.vy *= DAMP;
+      p.x  += p.vx; p.y  += p.vy;
     }
 
     // Lines
@@ -628,7 +649,7 @@ body {
         if (d >= LINK_DIST) continue;
 
         const t = 1 - d / LINK_DIST;
-        const nearMouse = mx > 0 && (
+        const nearMouse = mouseIn && (
           Math.hypot(pts[i].x - smx, pts[i].y - smy) < GOLD_ZONE ||
           Math.hypot(pts[j].x - smx, pts[j].y - smy) < GOLD_ZONE
         );
@@ -646,7 +667,7 @@ body {
 
     // Dots
     for (const p of pts) {
-      const nearMouse = mx > 0 && Math.hypot(p.x - smx, p.y - smy) < GOLD_ZONE;
+      const nearMouse = mouseIn && Math.hypot(p.x - smx, p.y - smy) < GOLD_ZONE;
       const al = (Math.sin(p.a) + 1) / 2 * .45 + .1;
       ctx.beginPath();
       ctx.arc(p.x, p.y, nearMouse ? p.r * 1.8 : p.r, 0, Math.PI * 2);
@@ -659,15 +680,28 @@ body {
     requestAnimationFrame(frame);
   }
 
-  addEventListener('resize', resize);
+  addEventListener('resize', () => {
+    resize();
+    // Rescale home positions proportionally
+    const sx = W / (c.width  || W);
+    const sy = H / (c.height || H);
+    for (const p of pts) { p.hx *= sx; p.hy *= sy; }
+  });
   init(); frame();
 })();
 
 // ══ UV helpers ═════════════════════════════════════════════
-// __uv$config is provided by uv/uv.config.js loaded above.
+// __uv$config provided by uv/uv.config.js
 
 function uvUrl(url) {
   return __uv$config.prefix + __uv$config.encodeUrl(url);
+}
+
+// From download.js — checks if a string is a navigable URL
+function isUrl(val = '') {
+  if (/^http(s?):\/\//.test(val)) return true;
+  if (val.includes('.') && val.substr(0, 1) !== ' ') return true;
+  return false;
 }
 
 /**
@@ -687,31 +721,55 @@ function resolveSearchUrl(raw, engine) {
 }
 
 // ══ Service Worker ═════════════════════════════════════════
-let uvReady = false;
-
-function registerSW() {
-  if (!('serviceWorker' in navigator)) {
-    setStatus('Service workers not supported in this browser.', true);
-    return;
-  }
-  navigator.serviceWorker.register('./sw.js', {
-    scope: __uv$config.prefix
-  }).then(reg => {
-    uvReady = true;
-    setStatus('<span class="ok">● UV active</span> — traffic is proxied through Ultraviolet');
-    console.log('[lightning] SW registered, scope:', reg.scope);
-  }).catch(err => {
-    setStatus('SW registration failed — serve this from a web server, not file://.', true);
-    console.warn('[lightning] SW error:', err);
-  });
-}
+// Following the same pattern as download.js:
+// Register SW fresh each time before proxying, then navigate.
+// This ensures the SW is controlling the page before we set iframe.src.
 
 function setStatus(html) {
   const el = document.getElementById('proxy-status');
   if (el) el.innerHTML = html;
 }
 
-window.addEventListener('load', registerSW);
+/**
+ * Registers (or re-uses) the SW and resolves when it's active and controlling.
+ * Returns a Promise so callers can await it before setting iframe.src.
+ */
+function ensureSW() {
+  if (!('serviceWorker' in navigator)) {
+    setStatus('Service workers not supported in this browser.');
+    return Promise.reject('no-sw');
+  }
+
+  return navigator.serviceWorker.register('./sw.js', {
+    scope: __uv$config.prefix
+  }).then(reg => {
+    setStatus('<span class="ok">● UV active</span> — proxied through Ultraviolet');
+
+    // If a SW is already active and controlling, we're good immediately.
+    if (navigator.serviceWorker.controller) return reg;
+
+    // Otherwise wait for the new SW to activate and take control.
+    return new Promise(resolve => {
+      const onController = () => {
+        navigator.serviceWorker.removeEventListener('controllerchange', onController);
+        resolve(reg);
+      };
+      // If it activates before controllerchange fires, catch that too.
+      if (reg.active) { resolve(reg); return; }
+      reg.installing?.addEventListener('statechange', function () {
+        if (this.state === 'activated') resolve(reg);
+      });
+      navigator.serviceWorker.addEventListener('controllerchange', onController);
+    });
+  }).catch(err => {
+    setStatus('SW failed — serve from a web server, not file://.');
+    console.warn('[lightning] SW error:', err);
+    throw err;
+  });
+}
+
+// Pre-register on load so it's ready before first use
+window.addEventListener('load', () => ensureSW().catch(() => {}));
 
 // ══ Navigation ═════════════════════════════════════════════
 const backBtn = document.getElementById('back-btn');
@@ -769,24 +827,34 @@ document.getElementById('home-search').addEventListener('keydown', e => {
 
 // ══ Modal open ═════════════════════════════════════════════
 /**
- * @param {string} url       - The destination URL
- * @param {string} title     - Title shown in modal bar
- * @param {boolean} forceUV  - Always proxy via UV (for search, proxy page, movies, music)
+ * @param {string}  url      - destination URL or relative path
+ * @param {string}  title    - label shown in the modal bar
+ * @param {boolean} forceUV  - force UV even for relative paths
  */
 function openModal(url, title, forceUV = false) {
-  let src;
+  const needsProxy = forceUV || isAbsoluteUrl(url);
 
-  if (forceUV || isAbsoluteUrl(url)) {
-    // External URL → route through UV
-    src = uvUrl(url);
-  } else {
-    // Relative path like /games/slope → serve directly
-    src = url;
-  }
-
+  // Show modal immediately with a loading state
   document.getElementById('modal-title').textContent = title || url;
-  document.getElementById('game-frame').src = src;
+  document.getElementById('game-frame').src = '';
   document.getElementById('modal').classList.add('open');
+
+  if (needsProxy) {
+    // Mirror download.js: register SW first, THEN set src.
+    // This guarantees the service worker intercepts the request.
+    ensureSW().then(() => {
+      let target = url;
+      if (!isUrl(target)) target = 'https://www.google.com/search?q=' + encodeURIComponent(target);
+      else if (!/^https?:\/\//i.test(target)) target = 'https://' + target;
+      document.getElementById('game-frame').src =
+        __uv$config.prefix + __uv$config.encodeUrl(target);
+    }).catch(() => {
+      document.getElementById('modal-title').textContent = 'UV unavailable — serve from a web server';
+    });
+  } else {
+    // Relative path (e.g. /games/slope) — load directly, no proxy needed
+    document.getElementById('game-frame').src = url;
+  }
 }
 
 // ══ Fullscreen button ══════════════════════════════════════
