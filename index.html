@@ -437,8 +437,8 @@ body {
 
 
 <!-- Scramjet + BareMux - load order matters -->
-<script src="/baremux/bare.cjs"></script>
-<script src="/scram/scramjet.all.js"></script>
+<script src="baremux/bare.cjs"></script>
+<script src="scram/scramjet.all.js"></script>
 
 <button class="back-btn" id="back-btn">
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
@@ -693,12 +693,10 @@ body {
 })();
 
 // ══ Scramjet helpers ══════════════════════════════════════
-// Scramjet uses ScramjetController (from scramjet.all.js)
-// and BareMux (from bare.cjs) for transport via a Wisp server.
-// All files must be served locally — the Wisp server can be public.
+// Uses relative paths so this works on GitHub Pages subfolders
+// e.g. username.github.io/reponame/ — no absolute /paths/ used.
 
 const WISP_SERVER = 'wss://wisp.mercurywork.shop/';
-const SCRAM_PREFIX = '/scram/';
 
 function isAbsoluteUrl(url) {
   return /^https?:\/\//i.test(url);
@@ -716,53 +714,65 @@ function setStatus(html) {
   if (el) el.innerHTML = html;
 }
 
-// Initialise Scramjet once and cache the controller
-let _scramjet = null;
-let _swReady  = false;
+// _sj holds the ScramjetController after init — needed for encodeUrl()
+let _sj = null;
+let _sjInit = null; // singleton promise so we only init once
 
-async function initScramjet() {
-  if (_swReady) return;
-
-  if (!('serviceWorker' in navigator)) {
-    setStatus('Service workers not supported.');
-    throw new Error('no-sw');
-  }
-
-  // 1. Init the ScramjetController (provided by scramjet.all.js)
-  const { ScramjetController } = $scramjetLoadController();
-  _scramjet = new ScramjetController({
-    files: {
-      wasm:  SCRAM_PREFIX + 'scramjet.wasm.wasm',
-      all:   SCRAM_PREFIX + 'scramjet.all.js',
-      sync:  SCRAM_PREFIX + 'scramjet.sync.js',
+function initScramjet() {
+  if (_sjInit) return _sjInit;
+  _sjInit = (async () => {
+    if (!('serviceWorker' in navigator)) {
+      throw new Error('Service workers not supported');
     }
+    if (typeof $scramjetLoadController === 'undefined') {
+      throw new Error('scramjet.all.js failed to load');
+    }
+    if (typeof BareMux === 'undefined') {
+      throw new Error('baremux/bare.cjs failed to load');
+    }
+
+    // 1. Create and init the controller — stores instance for encodeUrl() later
+    const { ScramjetController } = $scramjetLoadController();
+    _sj = new ScramjetController({
+      files: {
+        wasm: '/scram/scramjet.wasm.wasm',
+        all:  '/scram/scramjet.all.js',
+        sync: '/scram/scramjet.sync.js',
+      }
+    });
+    await _sj.init();
+
+    // 2. Register the SW at root scope
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+
+    // 3. Wait for it to be controlling
+    if (!navigator.serviceWorker.controller) {
+      await new Promise(resolve => {
+        navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
+        if (reg.active) setTimeout(resolve, 200);
+      });
+    }
+
+    // 4. Set transport: BareMux → Epoxy → Wisp
+    const conn = new BareMux.BareMuxConnection('/baremux/worker.js');
+    const hasTransport = await conn.getTransport();
+    if (!hasTransport) {
+      await conn.setTransport('/epoxy/index.mjs', [{ wisp: WISP_SERVER }]);
+    }
+
+    setStatus('<span class="ok">● Scramjet active</span> — proxied via Wisp');
+    console.log('[lightning] Scramjet ready');
+  })().catch(err => {
+    _sjInit = null; // allow retry
+    setStatus('<span class="warn">●</span> Proxy error: ' + err.message);
+    console.error('[lightning] Scramjet failed:', err);
+    throw err;
   });
-  await _scramjet.init();
-
-  // 2. Register the service worker (scope must match sw.js importScripts path)
-  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-
-  // 3. Wait for it to be active
-  await new Promise(resolve => {
-    if (navigator.serviceWorker.controller) { resolve(); return; }
-    navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
-    if (reg.active) resolve();
-  });
-
-  // 4. Set the Wisp transport via BareMux
-  const conn = new BareMux.BareMuxConnection('/baremux/worker.js');
-  await conn.setTransport('/epoxy/index.mjs', [{ wisp: WISP_SERVER }]);
-
-  _swReady = true;
-  setStatus('<span class="ok">● Scramjet active</span> — traffic proxied via Wisp');
-  console.log('[lightning] Scramjet ready');
+  return _sjInit;
 }
 
-// Pre-warm on load
-window.addEventListener('load', () => initScramjet().catch(err => {
-  console.warn('[lightning] Scramjet init failed:', err);
-  setStatus('Proxy unavailable — serve from a web server, not file://.');
-}));
+// Pre-warm on page load
+window.addEventListener('load', () => initScramjet().catch(() => {}));
 
 // ══ Navigation ═════════════════════════════════════════════
 const backBtn = document.getElementById('back-btn');
@@ -832,19 +842,20 @@ function openModal(url, title, forceProxy = false) {
   document.getElementById('modal').classList.add('open');
 
   if (needsProxy) {
-    // Ensure Scramjet is ready, then navigate via the /scram/ service worker prefix
     initScramjet().then(() => {
+      // Normalise to a full https:// URL
       let target = url;
       if (!/^https?:\/\//i.test(target)) {
-        target = target.includes('.') && !target.startsWith(' ')
+        target = (target.includes('.') && !target.startsWith(' '))
           ? 'https://' + target
           : 'https://www.google.com/search?q=' + encodeURIComponent(target);
       }
-      // Scramjet intercepts requests under its SW scope — just navigate the iframe
-      // to the scramjet service path which the SW will catch and proxy
-      document.getElementById('game-frame').src = '/scram/go#' + encodeURIComponent(target);
-    }).catch(() => {
-      document.getElementById('modal-title').textContent = 'Proxy unavailable — serve from a web server';
+      // _sj.encodeUrl() is the correct Scramjet API — returns the
+      // proxied URL that the service worker will intercept and handle
+      document.getElementById('game-frame').src = _sj.encodeUrl(target);
+    }).catch(err => {
+      document.getElementById('modal-title').textContent =
+        'Proxy error: ' + (err.message || err);
     });
   } else {
     // Relative path e.g. /games/files/drive-mad/index.html — load directly
