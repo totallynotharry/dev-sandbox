@@ -727,19 +727,13 @@ function initScramjet() {
     if (typeof $scramjetLoadController === 'undefined') {
       throw new Error('scramjet.all.js did not load — check /scram/ folder');
     }
-
-    // bare.cjs loaded via <script> exposes either window.BareMux (namespace)
-    // or BareMuxConnection directly on window depending on build format.
-    // Support both.
-    const BareMuxConnection =
-      (typeof BareMux !== 'undefined' && BareMux.BareMuxConnection) ||
-      (typeof window.BareMuxConnection !== 'undefined' && window.BareMuxConnection);
-
-    if (!BareMuxConnection) {
-      throw new Error('BareMuxConnection not found — check /baremux/bare.cjs');
+    // bare.cjs (older bare-mux) exposes window.BareMux = { SetTransport, ... }
+    // It does NOT have BareMuxConnection — use SetTransport directly instead.
+    if (typeof BareMux === 'undefined' || typeof BareMux.SetTransport !== 'function') {
+      throw new Error('bare.cjs did not load — check /baremux/ folder');
     }
 
-    // 1. Init ScramjetController (keeps instance for encodeUrl later)
+    // 1. Init ScramjetController — keep instance so encodeUrl() works later
     const { ScramjetController } = $scramjetLoadController();
     _sj = new ScramjetController({
       files: {
@@ -761,12 +755,19 @@ function initScramjet() {
       });
     }
 
-    // 4. Set BareMux transport → Epoxy → public Wisp server
-    const conn = new BareMuxConnection('/baremux/worker.js');
-    const current = await conn.getTransport().catch(() => null);
-    if (!current) {
-      await conn.setTransport('/epoxy/index.mjs', [{ wisp: WISP_SERVER }]);
-    }
+    // 4. Set transport using bare-mux v1 API: SetTransport(className, config)
+    // epoxy/index.mjs registers window.EpxMod globally when imported as a module script.
+    // SetTransport then finds it via eval("EpxMod.EpoxyClient").
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.type = 'module';
+      s.textContent = `import('/epoxy/index.mjs').then(m => { window.EpxMod = m; }).catch(e => console.error('[lightning] epoxy load failed', e));`;
+      s.onload = resolve;
+      document.head.appendChild(s);
+      // Give it a moment to execute
+      setTimeout(resolve, 500);
+    });
+    BareMux.SetTransport('EpxMod.EpoxyClient', { wisp: WISP_SERVER });
 
     setStatus('<span class="ok">● Scramjet active</span> — proxied via Wisp');
     console.log('[lightning] Scramjet ready');
