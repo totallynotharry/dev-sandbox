@@ -927,7 +927,10 @@ function renderGames() {
   if (gFilter === 'new') list = list.filter(g => g.new);
   if (gQuery) {
     const q = gQuery.toLowerCase();
-    list = list.filter(g => g.name.toLowerCase().includes(q));
+    // search across both field name formats
+    list = list.filter(g =>
+      (g.title ?? g.name ?? g.id ?? '').toLowerCase().includes(q)
+    );
   }
 
   document.querySelector('.chip[data-filter="all"]').textContent = `All ${allGames.length}`;
@@ -940,14 +943,20 @@ function renderGames() {
   }
 
   grid.innerHTML = list.map((g, i) => {
-    const needsProxy = isAbsoluteUrl(g.url);
+    // Support both JSON shapes:
+    //   {id, title, thumbnail, file}  ← your CDN format
+    //   {name, image, url}            ← old solararcade format
+    const name  = g.title  ?? g.name  ?? g.id ?? 'Unknown';
+    const thumb = g.thumbnail ?? g.image ?? '';
+    const url   = g.file   ?? g.url   ?? '';
+    const needsProxy = isAbsoluteUrl(url);
     return `
       <div class="game-card"
-           data-url="${esc(g.url)}"
-           data-name="${esc(g.name)}"
+           data-url="${esc(url)}"
+           data-name="${esc(name)}"
            style="animation-delay:${Math.min(i * 10, 500)}ms">
-        ${g.image
-          ? `<img class="card-img" src="${esc(g.image)}" alt="${esc(g.name)}" loading="lazy"
+        ${thumb
+          ? `<img class="card-img" src="${esc(thumb)}" alt="${esc(name)}" loading="lazy"
                  onerror="this.outerHTML='<div class=card-placeholder>🎮</div>'">`
           : `<div class="card-placeholder">🎮</div>`}
         ${needsProxy ? `<div class="badge-proxy">UV</div>` : ''}
@@ -958,7 +967,7 @@ function renderGames() {
               <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
           </div>
-          <div class="card-name-tip">${esc(g.name)}</div>
+          <div class="card-name-tip">${esc(name)}</div>
         </div>
       </div>
     `;
@@ -966,7 +975,6 @@ function renderGames() {
 
   grid.querySelectorAll('.game-card').forEach(card => {
     card.addEventListener('click', () => {
-      // openModal handles the routing decision internally
       openModal(card.dataset.url, card.dataset.name);
     });
   });
