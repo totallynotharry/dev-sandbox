@@ -3,7 +3,8 @@
     "id": "drive-mad",
     "title": "Drive Mad",
     "thumbnail": "/games/thumbs/drive-mad.jpg",
-    "file": "/games/files/drive-mad/index.html"
+    "file": "/games/files/drive-mad/index.html",
+    "new": "false"
   },
   {
     "id": "geoguessr",
@@ -155,13 +156,15 @@
     "id": "hollow-knight",
     "title": "Hollow Knight",
     "thumbnail": "/games/thumbs/hollowknight.jpg",
-    "file": "/games/files/non-folder/hollow-knight.html"
+    "file": "/games/files/non-folder/hollow-knight.html",
+    "new": "true"
   },
   {
     "id": "fnf",
     "title": "Friday Night Funkin'",
     "thumbnail": "/games/thumbs/fnf.png",
-    "file": "/games/files/non-folder/fnf.html"
+    "file": "/games/files/non-folder/fnf.html",
+    "new": "true"
   },
   {
     "id": "balatro",
@@ -179,12 +182,14 @@
     "id": "ultrakill",
     "title": "ULTRAKILL",
     "thumbnail": "/games/thumbs/ultrakill.jpg",
-    "file": "/games/files/ultrakill/index.html"
+    "file": "/games/files/ultrakill/index.html",
+    "new": "true"
   },
   {
     "id": "minecraft",
     "title": "Minecraft",
     "thumbnail": "/games/thumbs/minecraft.png",
-    "file": "/games/files/non-folder/wasm-gc%201.20.html"
+    "file": "/games/files/non-folder/wasm-gc%201.20.html",
+    "new": "true"
   }
 ]
