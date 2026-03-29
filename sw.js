@@ -1,10 +1,16 @@
 importScripts('/scram/scramjet.all.js');
 
 const { ScramjetServiceWorker } = $scramjetLoadWorker();
-const sw = new ScramjetServiceWorker();
+const scramjet = new ScramjetServiceWorker();
 
 self.addEventListener('fetch', (event) => {
-  if (sw.route(event)) {
-    event.respondWith(sw.fetch(event));
-  }
+  event.respondWith(
+    (async () => {
+      await scramjet.loadConfig();
+      if (scramjet.route(event)) {
+        return scramjet.fetch(event);
+      }
+      return fetch(event.request);
+    })()
+  );
 });
